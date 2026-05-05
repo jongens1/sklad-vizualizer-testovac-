@@ -4,9 +4,9 @@ import plotly.graph_objects as go
 import os
 
 # 1. Nastavenie stránky
-st.set_page_config(layout="wide", page_title="Warehouse 3D Digital Twin")
+st.set_page_config(layout="wide", page_title="Warehouse 3D Rack Model")
 
-st.title("🚀 SKLC3 - Warehouse 3D Digital Twin")
+st.title("🚀 SKLC3 - 3D Digitálne dvojča skladu")
 
 # --- 2. FUNKCIA NA NAČÍTANIE DÁT ---
 @st.cache_data
@@ -50,24 +50,25 @@ if df_raw is not None:
     selected_zone = st.sidebar.selectbox("Vyber Zónu:", available_zones, index=available_zones.index("2A") if "2A" in available_zones else 0)
     zone_df = df_raw[df_raw['tmp_zone'] == selected_zone].copy()
 
-    view_mode = st.sidebar.radio("Režim zobrazenia:", ["2D Mapa", "3D Model"])
+    view_mode = st.sidebar.radio("Režim zobrazenia:", ["2D Mapa (Plocha)", "3D Model (Regály)"])
     viz_mode = st.sidebar.radio("Farba podľa:", ["Využitie kapacity (%)", "Počet produktov"])
 
     levels = sorted(zone_df['ur_num'].unique().astype(int))
-    selected_level = st.sidebar.selectbox("Vyber poschodie:", ["Všetky úrovne (Priemer)"] + [str(l) for l in levels])
+    # Pridaná možnosť vidieť celý regál
+    selected_level = st.sidebar.selectbox("Vyber zobrazenie:", ["Celý regál (všetky úrovne)"] + [str(l) for l in levels])
     
-    if selected_level == "Všetky úrovne (Priemer)":
-        plot_df = zone_df.groupby(['ul_num', 'poz_num', 'Sekcia']).agg({
-            'util_num': 'mean', 'Počet produktov': 'mean', 'Množstvo produktov': 'sum'
-        }).reset_index()
-        plot_df['display_name'] = plot_df.apply(lambda r: f"{selected_zone}-{int(r['ul_num']):02d}-{int(r['poz_num']):02d}", axis=1)
+    if selected_level == "Celý regál (všetky úrovne)":
+        # NEAGREGUJEME - chceme vidieť každú lokáciu zvlášť
+        plot_df = zone_df.copy()
     else:
         plot_df = zone_df[zone_df['ur_num'] == int(selected_level)].copy()
-        plot_df['display_name'] = plot_df['Názov lokácie']
 
     # --- 4. VYKRESLENIE ---
     
-    if view_mode == "2D Mapa":
+    if view_mode == "2D Mapa (Plocha)":
+        if selected_level == "Celý regál (všetky úrovne)":
+            st.warning("V 2D režime pri zobrazení všetkých úrovní sa body prekrývajú. Odporúčam vybrať konkrétne poschodie.")
+        
         fig = go.Figure()
         c_col, c_scale = ('util_num', 'RdYlGn_r') if viz_mode == "Využitie kapacity (%)" else ('Počet produktov', 'Viridis_r')
         
@@ -75,65 +76,62 @@ if df_raw is not None:
             x=plot_df['ul_num'], y=plot_df['poz_num'],
             mode='markers',
             marker=dict(
-                size=15, symbol='square', color=plot_df[c_col], 
-                colorscale=c_scale, 
-                cmin=0, cmax=100 if viz_mode == "Využitie kapacity (%)" else plot_df[c_col].max(),
+                size=12, symbol='square', color=plot_df[c_col], 
+                colorscale=c_scale, cmin=0, cmax=100 if viz_mode == "Využitie kapacity (%)" else plot_df[c_col].max(),
                 showscale=True, line=dict(width=0.5, color='black')
             ),
-            text=plot_df['display_name'],
-            customdata=plot_df['util_num'],
-            hovertemplate="<b>%{text}</b><br>Využitie: %{customdata:.1f}%<extra></extra>"
+            text=plot_df['Názov lokácie'],
+            hovertemplate="<b>%{text}</b><br>Využitie: %{marker.color:.1f}%<extra></extra>"
         ))
         fig.update_layout(height=700, plot_bgcolor='white', xaxis=dict(title="Ulička"), yaxis=dict(title="Pozícia"))
         st.plotly_chart(fig, use_container_width=True)
 
     else:
-        # --- 3D MODEL (OPRAVENÁ ŠKÁLA) ---
-        st.subheader(f"3D Vizualizácia: Zóna {selected_zone}")
-
-        # Vytvoríme pomocný stĺpec pre vizuálnu výšku (Z-axis), aby 1500% neodletelo preč
-        # Ak je hodnota > 110, v grafe ju vykreslíme ako 110, ale v popise necháme pravdu
-        plot_df['viz_height'] = plot_df['util_num'].clip(upper=110)
+        # --- 3D MODEL (RACK VIEW) ---
+        st.subheader(f"3D Pohľad na regály: Zóna {selected_zone}")
 
         c_col, c_scale = ('util_num', 'RdYlGn_r') if viz_mode == "Využitie kapacity (%)" else ('Počet produktov', 'Viridis_r')
 
         fig = go.Figure(data=[go.Scatter3d(
             x=plot_df['ul_num'],
             y=plot_df['poz_num'],
-            z=plot_df['viz_height'], # Vizuálne zastropená výška
+            z=plot_df['ur_num'], # OS Z JE TERAZ ÚROVEŇ (1-8)
             mode='markers',
             marker=dict(
-                size=7,
+                size=5,
                 color=plot_df[c_col],
                 colorscale=c_scale,
-                cmin=0, 
-                cmax=100 if viz_mode == "Využitie kapacity (%)" else plot_df[c_col].max(), # FIX FAREBNEJ ŠKÁLY
+                cmin=0, cmax=100 if viz_mode == "Využitie kapacity (%)" else plot_df[c_col].max(),
                 opacity=0.9,
-                symbol='circle',
+                symbol='square',
                 colorbar=dict(title=viz_mode, x=1.1)
             ),
-            text=plot_df['display_name'],
-            customdata=plot_df['util_num'], # Skutočné dáta pre hover
-            hovertemplate="<b>%{text}</b><br>Skutočné využitie: %{customdata:.1f}%<br>Ulička: %{x}<br>Pozícia: %{y}<extra></extra>"
+            text=plot_df['Názov lokácie'],
+            customdata=plot_df[['util_num', 'ur_num']],
+            hovertemplate=(
+                "<b>Lokácia: %{text}</b><br>" +
+                "Poschodie: %{customdata[1]}<br>" +
+                "Využitie: %{customdata[0]:.1f}%<extra></extra>"
+            )
         )])
 
         fig.update_layout(
             scene=dict(
                 xaxis_title='Ulička',
                 yaxis_title='Pozícia',
-                zaxis_title='Využitie %',
-                zaxis=dict(range=[0, 120]), # Fixný rozsah vertikálnej osi
+                zaxis_title='Poschodie (Úroveň)',
+                zaxis=dict(dtick=1), # Zobrazujeme poschodia po jednom (1, 2, 3...)
                 aspectmode='manual',
-                aspectratio=dict(x=1, y=1, z=0.4)
+                aspectratio=dict(x=1, y=1, z=0.5) # Výška regálu
             ),
             margin=dict(l=0, r=0, b=0, t=30),
             height=850
         )
 
         st.plotly_chart(fig, use_container_width=True)
-        st.info("💡 **Tip**: Ak je bod tmavočervený, lokácia je plná (100% +). Skutočné % uvidíš po ukázaní myšou.")
+        st.info("💡 **Tip**: Body nad sebou predstavujú skutočné poschodia regálu. Farba indikuje ich zaplnenosť.")
 
-    st.dataframe(plot_df.sort_values(['ul_num', 'poz_num']), use_container_width=True)
+    st.dataframe(plot_df.sort_values(['ul_num', 'poz_num', 'ur_num']), use_container_width=True)
 
 else:
     st.info("👋 Prosím, nahraj Excel alebo pridaj 'data.xlsx' na GitHub.")
