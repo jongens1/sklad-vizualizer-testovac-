@@ -4,9 +4,9 @@ import plotly.graph_objects as go
 import os
 
 # 1. Nastavenie stránky
-st.set_page_config(layout="wide", page_title="SKLC3 CAD Warehouse Layout")
+st.set_page_config(layout="wide", page_title="SKLC3 Warehouse Digital Twin")
 
-st.title("🏛️ SKLC3 - 3D Warehouse Digital Twin (CAD Match)")
+st.title("🏛️ SKLC3 - 3D Pôdorys (CAD Layout Match)")
 
 @st.cache_data
 def load_and_parse_data(file_source):
@@ -54,32 +54,32 @@ if df_raw is not None:
     levels = sorted(zone_df['ur_num'].unique().astype(int))
     selected_level = st.sidebar.selectbox("Vyber poschodie:", ["Všetky úrovne (Priemer)"] + [str(l) for l in levels])
 
-    # --- LOGIKA MAPY PODĽA CAD VÝKRESU ---
+    # --- LOGIKA MAPY PODĽA CAD VÝKRESU (Presné napasovanie) ---
     def get_cad_coords(row):
         z, u, p = row['tmp_zone'], row['ul_num'], row['poz_num']
         
-        # 1. Zóny A, B, C, D (Stredový blok - vertikálne regály)
-        # Rozmiestnime ich vedľa seba na osi X
-        zone_offsets_x = {'2A': 40, '2B': 90, '2C': 140, '2D': 190}
+        # Mierky
+        u_step = 2.8  # Šírka uličky
+        p_step = 1.1  # Dĺžka regálu (bay)
         
-        if z in zone_offsets_x:
-            x = zone_offsets_x[z] + (u * 1.5)
-            # Pridáme medzeru v strede uličky pre koridor (ak p > 15, posunieme hore)
-            y = p if p <= 15 else p + 10
-            return x, y
+        # 1. HLAVNÝ STRED (A, B, C, D)
+        # Tieto zóny sú na výkrese horizontálne bloky regálov.
+        # X os = ulička, Y os = pozícia (plus vertikálny offset zóny)
+        if z == '2A': return (u * u_step), 380 + (p * p_step)
+        if z == '2B': return (u * u_step), 260 + (p * p_step)
+        if z == '2C': return (u * u_step), 140 + (p * p_step)
+        if z == '2D': return (u * u_step), 0 + (p * p_step)
         
-        # 2. Zóna 2E (Ľavé krídlo - horizontálne regály)
-        if z == '2E':
-            # P je dĺžka regálu (X), U je číslo radu (Y)
-            return p * 0.8, 40 + (u * 2.5)
-        
-        # 3. Zóna 2F (Pravé krídlo - horizontálne regály)
-        if z == '2F':
-            return 250 + (p * 0.8), 40 + (u * 2.5)
+        # 2. BOČNÉ KRÍDLA (E a F)
+        # Sú otočené o 90 stupňov. Pozícia (P) je na X osi a Ulička (U) na Y osi.
+        if z == '2E': 
+            return -100 + (p * p_step), 140 + (u * u_step)
+        if z == '2F': 
+            return 240 + (p * p_step), 140 + (u * u_step)
         
         return u, p
 
-    # --- PRÍPRAVA DÁT ---
+    # --- AGREGÁCIA DÁT ---
     if selected_level == "Všetky úrovne (Priemer)":
         plot_df = zone_df.groupby(['tmp_zone', 'ul_num', 'poz_num']).agg({
             'util_num': 'mean', 'Počet produktov': 'mean', 'Množstvo produktov': 'sum'
@@ -99,8 +99,6 @@ if df_raw is not None:
     c_col, c_scale = ('util_num', 'RdYlGn_r') if viz_mode == "Využitie kapacity (%)" else ('Počet produktov', 'Viridis_r')
 
     fig = go.Figure()
-
-    # Hlavná vrstva regálov
     fig.add_trace(go.Scatter3d(
         x=plot_df['x_viz'], y=plot_df['y_viz'], z=plot_df['z_viz'],
         mode='markers',
@@ -114,25 +112,22 @@ if df_raw is not None:
             opacity=0.9
         ),
         text=plot_df['display_name'],
-        hovertemplate="<b>%{text}</b><br>Využitie: %{marker.color:.1f}%<extra></extra>"
+        hovertemplate="<b>%{text}</b><br>Hodnota: %{marker.color:.1f}<extra></extra>"
     ))
 
-    # Nastavenie scény tak, aby pripomínala pôdorys haly
     fig.update_layout(
-        title=f"3D Pôdorys skladu: {selected_main} ({selected_level})",
         scene=dict(
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=""),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=""),
             zaxis=dict(title='Poschodie', range=[0, 9] if selected_level != "Všetky úrovne (Priemer)" else [0, 2]),
             aspectmode='manual',
-            # X je šírka haly, Y je dĺžka haly
-            aspectratio=dict(x=2, y=1.5, z=0.1 if selected_level == "Všetky úrovne (Priemer)" else 0.4)
+            # Pomer strán haly: X je šírka (stred + krídla), Y je celková dĺžka (A až D)
+            aspectratio=dict(x=1.8, y=2.5, z=0.1 if selected_level == "Všetky úrovne (Priemer)" else 0.4)
         ),
-        margin=dict(l=0, r=0, b=0, t=40), height=850
+        margin=dict(l=0, r=0, b=0, t=30), height=850
     )
 
     st.plotly_chart(fig, use_container_width=True)
-    st.info("💡 Toto zobrazenie kopíruje CAD layout: E (vľavo), A-D (stred), F (vpravo).")
 
 else:
-    st.info("Nahraj Excel súbor.")
+    st.info("👋 Prosím, nahraj Excel.")
