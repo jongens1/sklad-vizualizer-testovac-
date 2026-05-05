@@ -3,9 +3,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import os
 
+# 1. Nastavenie stránky
 st.set_page_config(layout="wide", page_title="Warehouse 3D Digital Twin")
 
-st.title("🏗️ SKLC3 - Realistický 3D Model Regálov")
+st.title("🏛️ SKLC3 - 3D Priemyselný Model Skladu")
 
 @st.cache_data
 def load_and_parse_data(file_source):
@@ -47,10 +48,14 @@ if df_raw is not None:
 
     viz_mode = st.sidebar.radio("Farba podľa:", ["Využitie kapacity (%)", "Počet produktov"])
 
-    # --- 3D RACK MODEL ---
-    # Filter pre uličky (pre prehľadnosť v 3D zobrazíme naraz len malú časť)
+    # --- 3D RACK MODEL LOGIKA ---
+    # Logika pre rozostupy uličiek
+    spacing_factor = 4.0 # Šírka uličky (čím väčšie, tým širšia ulička)
+    zone_df['x_viz'] = zone_df['ul_num'] * spacing_factor
+    
+    # Filter uličiek (aby to nebolo príliš ťažké na výkon, defaultne 10 uličiek)
     min_u, max_u = int(zone_df['ul_num'].min()), int(zone_df['ul_num'].max())
-    sel_u = st.sidebar.slider("Rozsah uličiek na zobrazenie:", min_u, max_u, (min_u, min_u + 3))
+    sel_u = st.sidebar.slider("Zobraziť rozsah uličiek:", min_u, max_u, (min_u, min_u + 10))
     
     plot_df = zone_df[(zone_df['ul_num'] >= sel_u[0]) & (zone_df['ul_num'] <= sel_u[1])].copy()
 
@@ -58,67 +63,66 @@ if df_raw is not None:
 
     fig = go.Figure()
 
-    # 1. KONŠTRUKCIA REGÁLU (Oceľové nosníky)
-    # Vykreslíme horizontálne čiary (police) pre každú uličku
-    for u in plot_df['ul_num'].unique():
+    # 1. KRESLENIE KONŠTRUKCIE (POLICE A STĹPY)
+    # Pre každú vybranú uličku nakreslíme "rám"
+    for u_orig in plot_df['ul_num'].unique():
+        u = u_orig * spacing_factor
+        
+        # Horizontálne nosníky (Police) - kreslíme len podlahu a vrch pre výkon, alebo všetky
         for z in range(1, int(plot_df['ur_num'].max()) + 2):
             fig.add_trace(go.Scatter3d(
                 x=[u, u], y=[plot_df['poz_num'].min()-0.5, plot_df['poz_num'].max()+0.5], z=[z-0.5, z-0.5],
-                mode='lines', line=dict(color='black', width=4), showlegend=False, hoverinfo='none'
+                mode='lines', line=dict(color='#444', width=2), showlegend=False, hoverinfo='none'
             ))
 
-    # Vykreslíme vertikálne čiary (stĺpy) - každé 3 pozície jeden rám
-    for u in plot_df['ul_num'].unique():
-        # Stĺpy na začiatku, konca a každé 3 pozície
+        # Vertikálne stojky (každé 3 Bay-e)
         positions = list(range(int(plot_df['poz_num'].min()), int(plot_df['poz_num'].max()) + 2))
         for p in positions:
             if (p-1) % 3 == 0 or p == max(positions):
                 fig.add_trace(go.Scatter3d(
                     x=[u, u], y=[p-0.5, p-0.5], z=[0.5, plot_df['ur_num'].max() + 0.5],
-                    mode='lines', line=dict(color='gray', width=6), showlegend=False, hoverinfo='none'
+                    mode='lines', line=dict(color='gray', width=3), showlegend=False, hoverinfo='none'
                 ))
 
-    # 2. VYKRESLENIE BUNKIEK (Tovar v regáli)
+    # 2. VYKRESLENIE TOVARU (KOCKY)
     fig.add_trace(go.Scatter3d(
-        x=plot_df['ul_num'],
+        x=plot_df['x_viz'],
         y=plot_df['poz_num'],
         z=plot_df['ur_num'],
         mode='markers',
         marker=dict(
-            size=20, # Ešte väčšie kocky aby vyplnili rám
+            size=10, 
             symbol='square',
             color=plot_df[c_col],
             colorscale=c_scale,
             cmin=0, cmax=100 if viz_mode == "Využitie kapacity (%)" else plot_df[c_col].max(),
             line=dict(width=1, color='black'),
             opacity=0.9,
-            colorbar=dict(title=viz_mode, x=1.1)
+            colorbar=dict(title=viz_mode, x=1.05)
         ),
         text=plot_df['Názov lokácie'],
-        hovertemplate="<b>%{text}</b><br>Využitie: %{marker.color:.1f}%<extra></extra>"
+        hovertemplate="<b>%{text}</b><br>Hodnota: %{marker.color:.1f}<extra></extra>"
     ))
 
-    # 3. NASTAVENIE PROPORCIÍ (Crucial for "Rack" look)
+    # 3. NASTAVENIE POHĽADU (Perspektíva)
     fig.update_layout(
         scene=dict(
-            xaxis=dict(title='Ulička (Rady)', gridcolor='white', showbackground=True, backgroundcolor="#f0f0f0"),
-            yaxis=dict(title='Pozícia (Bay)', gridcolor='white', showbackground=True, backgroundcolor="#e5e5e5"),
-            zaxis=dict(title='Poschodie', dtick=1, range=[0, 9], gridcolor='white', showbackground=True, backgroundcolor="#d5d5d5"),
+            xaxis=dict(title='Uličky (Rady)', showbackground=True, backgroundcolor="#f0f0f0"),
+            yaxis=dict(title='Pozícia v rade (Bay)', showbackground=True, backgroundcolor="#e5e5e5"),
+            zaxis=dict(title='Poschodie', dtick=1, range=[0, 9], showbackground=True, backgroundcolor="#d5d5d5"),
             aspectmode='manual',
-            # Tu nastavíme: šírka uličiek(x), dĺžka regálu(y), výška(z)
-            # Y je 4x dlhšie ako X, aby to vyzeralo ako dlhý rad
-            aspectratio=dict(x=1, y=3, z=1) 
+            # Pomer strán: X (šírka skladu), Y (dĺžka regálov), Z (výška)
+            aspectratio=dict(x=2, y=2, z=0.5) 
         ),
-        margin=dict(l=0, r=0, b=0, t=40),
+        margin=dict(l=0, r=0, b=0, t=30),
         height=850,
-        title=f"Realistický 3D pohľad: Zóna {selected_zone}"
+        title=f"3D Priemyselný model: Zóna {selected_zone}"
     )
 
     st.plotly_chart(fig, use_container_width=True)
-    st.info("💡 **Legenda:** Čierne čiary sú police, sivé stĺpy sú rámy regálov. Každá ulička je jeden rad.")
+    st.info("💡 Medzi radmi sú teraz voľné uličky. Pre lepšiu prehľadnosť použi slider uličiek vľavo.")
     
-    st.write("### Dáta zobrazených regálov")
     st.dataframe(plot_df.sort_values(['ul_num', 'poz_num', 'ur_num']), use_container_width=True)
 
 else:
-    st.info("Nahraj Excel súbor.")
+    st.info("👋 Prosím, nahraj Excel.")
