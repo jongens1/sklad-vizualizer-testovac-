@@ -4,9 +4,9 @@ import plotly.graph_objects as go
 import os
 
 # 1. Nastavenie stránky
-st.set_page_config(layout="wide", page_title="Warehouse 3D Loop")
+st.set_page_config(layout="wide", page_title="SKLC3 Warehouse Layout")
 
-st.title("🔄 SKLC3 - 3D Celkový Pohľad (Loop)")
+st.title("🔄 SKLC3 - Kompletný 3D Pôdorys")
 
 @st.cache_data
 def load_and_parse_data(file_source):
@@ -42,71 +42,58 @@ if os.path.exists("data.xlsx"):
 
 if df_raw is not None:
     st.sidebar.header("📍 Nastavenia")
-    
-    # NOVÉ: Možnosť vybrať buď konkrétnu zónu alebo celý LOOP
-    available_zones = sorted(df_raw['tmp_zone'].unique())
-    main_selection = st.sidebar.selectbox("Vyber zobrazenie:", ["CELÝ LOOP (A-F)"] + available_zones)
-
+    main_options = ["CELÝ LOOP (A-F)"] + sorted(df_raw['tmp_zone'].unique())
+    selected_main = st.sidebar.selectbox("Vyber zobrazenie:", main_options)
     viz_mode = st.sidebar.radio("Farba podľa:", ["Využitie kapacity (%)", "Počet produktov"])
 
-    # Logika pre globálne súradnice kociek
-    def get_global_coords(row):
+    # --- LOGIKA ROZLOŽENIA PODĽA NÁKRESU ---
+    def get_layout_coords(row):
         z = row['tmp_zone']
         u = row['ul_num']
         p = row['poz_num']
         
-        # Štandardný rozostup medzi uličkami
-        u_space = u * 4.0
+        # Koeficienty pre medzery
+        u_gap = 2.5 # Medzera medzi uličkami
+        p_gap = 1.2 # Medzera medzi pozíciami
         
-        # OFFSETY PRE JEDNOTLIVÉ ZÓNY (KOCKY)
-        # Každá kocka je posunutá o 400 jednotiek na osi X
-        offsets = {
-            '2E': 0,
-            '2A': 400,
-            '2B': 800,
-            '2C': 1200,
-            '2D': 1600,
-            '2F': 2000
-        }
+        # 1. STREDOVÝ STĹPEC (A, B, C, D pod sebou)
+        # X os = ulička, Y os = pozícia + posun zóny
+        if z == '2A': return (u * u_gap), 240 + (p * p_gap)
+        if z == '2B': return (u * u_gap), 160 + (p * p_gap)
+        if z == '2C': return (u * u_gap), 80 + (p * p_gap)
+        if z == '2D': return (u * u_gap), 0 + (p * p_gap)
         
-        base_x = offsets.get(z, 0) if main_selection == "CELÝ LOOP (A-F)" else 0
-        return base_x + u_space, p
+        # 2. BOČNÉ ZÓNY (E vľavo, F vpravo - otočené vertikálne)
+        # Prehodíme uličku a pozíciu, aby boli regály otočené o 90 stupňov
+        if z == '2E': return -80 + (p * p_gap), (u * u_gap) + 80
+        if z == '2F': return 250 + (p * p_gap), (u * u_gap) + 80
+        
+        return u * u_gap, p * p_gap
 
-    if main_selection == "CELÝ LOOP (A-F)":
+    if selected_main == "CELÝ LOOP (A-F)":
         plot_df = df_raw[df_raw['tmp_zone'].isin(['2A','2B','2C','2D','2E','2F'])].copy()
         is_loop = True
     else:
-        plot_df = df_raw[df_raw['tmp_zone'] == main_selection].copy()
+        plot_df = df_raw[df_raw['tmp_zone'] == selected_main].copy()
         is_loop = False
 
-    # Aplikácia globálnych súradníc
-    coords = plot_df.apply(lambda r: pd.Series(get_global_coords(r)), axis=1)
-    plot_df['x_glob'], plot_df['y_glob'] = coords[0], coords[1]
+    # Aplikácia súradníc
+    coords = plot_df.apply(lambda r: pd.Series(get_layout_coords(r)), axis=1)
+    plot_df['x_viz'], plot_df['y_viz'] = coords[0], coords[1]
 
     # VYKRESLENIE
-    st.subheader(f"3D Model: {main_selection}")
-    
+    st.subheader(f"Zobrazenie: {selected_main}")
     c_col, c_scale = ('util_num', 'RdYlGn_r') if viz_mode == "Využitie kapacity (%)" else ('Počet produktov', 'Viridis_r')
 
     fig = go.Figure()
 
-    # 1. VYKRESLENIE KONŠTRUKCIE (Len ak nie sme v loope, kvôli výkonu)
-    if not is_loop:
-        for u_orig in plot_df['ul_num'].unique():
-            u_viz = u_orig * 4.0
-            fig.add_trace(go.Scatter3d(
-                x=[u_viz, u_viz], y=[plot_df['poz_num'].min(), plot_df['poz_num'].max()], z=[0.5, 0.5],
-                mode='lines', line=dict(color='gray', width=2), showlegend=False, hoverinfo='none'
-            ))
-
-    # 2. VYKRESLENIE LOKÁCIÍ (KOCKY)
     fig.add_trace(go.Scatter3d(
-        x=plot_df['x_glob'],
-        y=plot_df['y_glob'],
+        x=plot_df['x_viz'],
+        y=plot_df['y_viz'],
         z=plot_df['ur_num'],
         mode='markers',
         marker=dict(
-            size=6 if is_loop else 12, # Menšie body pre celý loop
+            size=6 if is_loop else 10,
             symbol='square',
             color=plot_df[c_col],
             colorscale=c_scale,
@@ -116,27 +103,24 @@ if df_raw is not None:
             colorbar=dict(title=viz_mode, x=1.05)
         ),
         text=plot_df['Názov lokácie'],
-        hovertemplate="<b>%{text}</b><br>Hodnota: %{marker.color:.1f}<extra></extra>"
+        hovertemplate="<b>%{text}</b><br>Využitie: %{marker.color:.1f}%<extra></extra>"
     ))
 
-    # 3. NASTAVENIE POHĽADU
     fig.update_layout(
         scene=dict(
-            xaxis=dict(title='Uličky (Globálne)', showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(title='Pozícia (Bay)', showgrid=False, zeroline=False, showticklabels=False),
-            zaxis=dict(title='Poschodie', dtick=1, range=[0, 9]),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=""),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=""),
+            zaxis=dict(title='Poschodie', range=[0, 9]),
             aspectmode='manual',
-            # Ak je to Loop, natiahneme X os poriadne doprava
-            aspectratio=dict(x=4 if is_loop else 1, y=1, z=0.3)
+            # Prispôsobenie celkového pohľadu (X je šírka, Y je dĺžka haly)
+            aspectratio=dict(x=1.5, y=2, z=0.3)
         ),
         margin=dict(l=0, r=0, b=0, t=30),
         height=850
     )
 
     st.plotly_chart(fig, use_container_width=True)
-    
-    st.write("### Detailný zoznam lokálií (Top 100)")
-    st.dataframe(plot_df.sort_values([c_col], ascending=False).head(100), use_container_width=True)
+    st.info("💡 Tip: V pohľade LOOP sú zóny E a F na bokoch a A-D v stĺpci nad sebou (zobrazené v 3D priereze).")
 
 else:
-    st.info("👋 Prosím, nahraj Excel alebo pridaj 'data.xlsx' na GitHub.")
+    st.info("👋 Prosím, nahraj Excel.")
