@@ -74,34 +74,47 @@ if df_raw is not None:
         fig.add_trace(go.Scatter(
             x=plot_df['ul_num'], y=plot_df['poz_num'],
             mode='markers',
-            marker=dict(size=15, symbol='square', color=plot_df[c_col], colorscale=c_scale, showscale=True, line=dict(width=0.5, color='black')),
+            marker=dict(
+                size=15, symbol='square', color=plot_df[c_col], 
+                colorscale=c_scale, 
+                cmin=0, cmax=100 if viz_mode == "Využitie kapacity (%)" else plot_df[c_col].max(),
+                showscale=True, line=dict(width=0.5, color='black')
+            ),
             text=plot_df['display_name'],
-            hovertemplate="<b>%{text}</b><br>Hodnota: %{marker.color:.1f}<extra></extra>"
+            customdata=plot_df['util_num'],
+            hovertemplate="<b>%{text}</b><br>Využitie: %{customdata:.1f}%<extra></extra>"
         ))
         fig.update_layout(height=700, plot_bgcolor='white', xaxis=dict(title="Ulička"), yaxis=dict(title="Pozícia"))
         st.plotly_chart(fig, use_container_width=True)
 
     else:
-        # --- NOVÝ 3D MODEL CEZ PLOTLY (BEZ MAPY SVETA) ---
+        # --- 3D MODEL (OPRAVENÁ ŠKÁLA) ---
         st.subheader(f"3D Vizualizácia: Zóna {selected_zone}")
+
+        # Vytvoríme pomocný stĺpec pre vizuálnu výšku (Z-axis), aby 1500% neodletelo preč
+        # Ak je hodnota > 110, v grafe ju vykreslíme ako 110, ale v popise necháme pravdu
+        plot_df['viz_height'] = plot_df['util_num'].clip(upper=110)
 
         c_col, c_scale = ('util_num', 'RdYlGn_r') if viz_mode == "Využitie kapacity (%)" else ('Počet produktov', 'Viridis_r')
 
         fig = go.Figure(data=[go.Scatter3d(
             x=plot_df['ul_num'],
             y=plot_df['poz_num'],
-            z=plot_df['util_num'], # Výška bodu v 3D priestore
+            z=plot_df['viz_height'], # Vizuálne zastropená výška
             mode='markers',
             marker=dict(
-                size=8,
-                color=plot_df[c_col],                # Farba podľa využitia/SKU
+                size=7,
+                color=plot_df[c_col],
                 colorscale=c_scale,
-                opacity=0.8,
-                symbol='square',                     # Štvorcové stĺpce
-                colorbar=dict(title=viz_mode)
+                cmin=0, 
+                cmax=100 if viz_mode == "Využitie kapacity (%)" else plot_df[c_col].max(), # FIX FAREBNEJ ŠKÁLY
+                opacity=0.9,
+                symbol='circle',
+                colorbar=dict(title=viz_mode, x=1.1)
             ),
             text=plot_df['display_name'],
-            hovertemplate="<b>%{text}</b><br>Využitie: %{z:.1f}%<extra></extra>"
+            customdata=plot_df['util_num'], # Skutočné dáta pre hover
+            hovertemplate="<b>%{text}</b><br>Skutočné využitie: %{customdata:.1f}%<br>Ulička: %{x}<br>Pozícia: %{y}<extra></extra>"
         )])
 
         fig.update_layout(
@@ -109,15 +122,16 @@ if df_raw is not None:
                 xaxis_title='Ulička',
                 yaxis_title='Pozícia',
                 zaxis_title='Využitie %',
+                zaxis=dict(range=[0, 120]), # Fixný rozsah vertikálnej osi
                 aspectmode='manual',
-                aspectratio=dict(x=1, y=1, z=0.5) # Sploštenie výšky pre lepší prehľad
+                aspectratio=dict(x=1, y=1, z=0.4)
             ),
             margin=dict(l=0, r=0, b=0, t=30),
-            height=800
+            height=850
         )
 
         st.plotly_chart(fig, use_container_width=True)
-        st.info("🖱️ **Ľavé tlačidlo**: Otáčanie | **Pravé tlačidlo**: Posun | **Koliesko**: Zoom")
+        st.info("💡 **Tip**: Ak je bod tmavočervený, lokácia je plná (100% +). Skutočné % uvidíš po ukázaní myšou.")
 
     st.dataframe(plot_df.sort_values(['ul_num', 'poz_num']), use_container_width=True)
 
