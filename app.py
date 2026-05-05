@@ -1,21 +1,17 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import pydeck as pdk
 import os
 
 # 1. Nastavenie stránky
-st.set_page_config(layout="wide", page_title="Warehouse 3D Test")
+st.set_page_config(layout="wide", page_title="Warehouse 3D Digital Twin")
 
-st.title("🚀 SKLC3 - 3D Warehouse Digital Twin")
+st.title("🚀 SKLC3 - Warehouse 3D Digital Twin")
 
-# --- 2. FUNKCIA NA NAČÍTANIE DÁT S CACHINGOM ---
+# --- 2. FUNKCIA NA NAČÍTANIE DÁT ---
 @st.cache_data
 def load_and_parse_data(file_source):
-    """Načíta Excel a pripraví dáta."""
     df = pd.read_excel(file_source)
-    
-    # Ošetrenie prázdnych hodnôt
     df['% Využité kapacity'] = df['% Využité kapacity'].fillna(0)
     df['Počet produktov'] = df['Počet produktov'].fillna(0)
     df['Množstvo produktov'] = df['Množstvo produktov'].fillna(0)
@@ -42,28 +38,21 @@ def load_and_parse_data(file_source):
     df['util_num'] = df['% Využité kapacity'].apply(clean_percent)
     return df
 
-# --- 3. LOGIKA ZDROJA DÁT ---
-uploaded_file = st.sidebar.file_uploader("Nahraj vlastný Excel (.xlsx)", type=["xlsx"])
-
+# Načítanie dát
 df_raw = None
-if uploaded_file:
-    df_raw = load_and_parse_data(uploaded_file)
-elif os.path.exists("data.xlsx"):
+if os.path.exists("data.xlsx"):
     df_raw = load_and_parse_data("data.xlsx")
 
 if df_raw is not None:
-    # 4. SIDEBAR FILTRE
+    # 3. SIDEBAR
     st.sidebar.header("📍 Nastavenia")
-    
     available_zones = sorted(df_raw['tmp_zone'].unique())
     selected_zone = st.sidebar.selectbox("Vyber Zónu:", available_zones, index=available_zones.index("2A") if "2A" in available_zones else 0)
     zone_df = df_raw[df_raw['tmp_zone'] == selected_zone].copy()
 
-    # Režim a Metrika
     view_mode = st.sidebar.radio("Režim zobrazenia:", ["2D Mapa", "3D Model"])
     viz_mode = st.sidebar.radio("Farba podľa:", ["Využitie kapacity (%)", "Počet produktov"])
 
-    # Výber poschodia
     levels = sorted(zone_df['ur_num'].unique().astype(int))
     selected_level = st.sidebar.selectbox("Vyber poschodie:", ["Všetky úrovne (Priemer)"] + [str(l) for l in levels])
     
@@ -76,71 +65,60 @@ if df_raw is not None:
         plot_df = zone_df[zone_df['ur_num'] == int(selected_level)].copy()
         plot_df['display_name'] = plot_df['Názov lokácie']
 
-    # --- 5. VYKRESLENIE ---
+    # --- 4. VYKRESLENIE ---
     
     if view_mode == "2D Mapa":
-        # PÔVODNÝ 2D PLOTLY KÓD
         fig = go.Figure()
-        
         c_col, c_scale = ('util_num', 'RdYlGn_r') if viz_mode == "Využitie kapacity (%)" else ('Počet produktov', 'Viridis_r')
         
         fig.add_trace(go.Scatter(
             x=plot_df['ul_num'], y=plot_df['poz_num'],
             mode='markers',
-            marker=dict(
-                size=15, symbol='square', color=plot_df[c_col],
-                colorscale=c_scale, showscale=True, line=dict(width=0.5, color='black')
-            ),
+            marker=dict(size=15, symbol='square', color=plot_df[c_col], colorscale=c_scale, showscale=True, line=dict(width=0.5, color='black')),
             text=plot_df['display_name'],
-            customdata=plot_df[['util_num', 'Počet produktov', 'Sekcia']],
-            hovertemplate="<b>%{text}</b><br>Využitie: %{customdata[0]:.1f}%<extra></extra>"
+            hovertemplate="<b>%{text}</b><br>Hodnota: %{marker.color:.1f}<extra></extra>"
         ))
-
         fig.update_layout(height=700, plot_bgcolor='white', xaxis=dict(title="Ulička"), yaxis=dict(title="Pozícia"))
         st.plotly_chart(fig, use_container_width=True)
 
     else:
-        # --- OPRAVENÝ 3D PYDECK ---
-        st.subheader(f"3D Model: Zóna {selected_zone}")
+        # --- NOVÝ 3D MODEL CEZ PLOTLY (BEZ MAPY SVETA) ---
+        st.subheader(f"3D Vizualizácia: Zóna {selected_zone}")
 
-        # Definícia farieb pre stĺpce
-        def get_color(row):
-            val = row['util_num'] if viz_mode == "Využitie kapacity (%)" else (row['Počet produktov'] * 10)
-            if val < 20: return [46, 204, 113, 200]
-            if val < 80: return [241, 196, 15, 200]
-            return [231, 76, 60, 200]
+        c_col, c_scale = ('util_num', 'RdYlGn_r') if viz_mode == "Využitie kapacity (%)" else ('Počet produktov', 'Viridis_r')
 
-        plot_df['color'] = plot_df.apply(get_color, axis=1)
+        fig = go.Figure(data=[go.Scatter3d(
+            x=plot_df['ul_num'],
+            y=plot_df['poz_num'],
+            z=plot_df['util_num'], # Výška bodu v 3D priestore
+            mode='markers',
+            marker=dict(
+                size=8,
+                color=plot_df[c_col],                # Farba podľa využitia/SKU
+                colorscale=c_scale,
+                opacity=0.8,
+                symbol='square',                     # Štvorcové stĺpce
+                colorbar=dict(title=viz_mode)
+            ),
+            text=plot_df['display_name'],
+            hovertemplate="<b>%{text}</b><br>Využitie: %{z:.1f}%<extra></extra>"
+        )])
 
-        layer = pdk.Layer(
-            "ColumnLayer",
-            plot_df,
-            get_position=["ul_num", "poz_num"],
-            get_elevation="util_num",
-            elevation_scale=0.2,
-            radius=0.4,
-            get_fill_color="color",
-            pickable=True,
-            auto_highlight=True,
+        fig.update_layout(
+            scene=dict(
+                xaxis_title='Ulička',
+                yaxis_title='Pozícia',
+                zaxis_title='Využitie %',
+                aspectmode='manual',
+                aspectratio=dict(x=1, y=1, z=0.5) # Sploštenie výšky pre lepší prehľad
+            ),
+            margin=dict(l=0, r=0, b=0, t=30),
+            height=800
         )
 
-        view_state = pdk.ViewState(
-            latitude=plot_df['poz_num'].mean() if not plot_df.empty else 0,
-            longitude=plot_df['ul_num'].mean() if not plot_df.empty else 0,
-            zoom=14, pitch=45, bearing=0
-        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.info("🖱️ **Ľavé tlačidlo**: Otáčanie | **Pravé tlačidlo**: Posun | **Koliesko**: Zoom")
 
-        r = pdk.Deck(
-            layers=[layer],
-            initial_view_state=view_state,
-            map_style="dark", # Bezpečný štýl pre Streamlit Cloud
-            tooltip={"text": "Lokácia: {display_name}\nVyužitie: {util_num:.1f}%"}
-        )
-
-        st.pydeck_chart(r)
-        st.info("🖱️ **Pravé tlačidlo**: Otáčanie | **Ctrl + Myš**: Nakláňanie")
-
-    # Tabuľka na spodku
     st.dataframe(plot_df.sort_values(['ul_num', 'poz_num']), use_container_width=True)
 
 else:
