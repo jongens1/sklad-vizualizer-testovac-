@@ -148,15 +148,14 @@ def bounds(df):
 
 def build_layout(df, compact=True):
     """Usporiadanie D–C–B–A a bočných krídel E/F z celého vstupu.
-    """Pevné obálky podľa fotografie; filtre nemenia mierku ani polohu.
 
     Kompaktný režim zabalí bloky s jednotnou medzerou. Rozšírený zachová
     aspoň CAD odstupy a zväčší minimálnu medzeru. Nikdy nepresúva jednotlivé
     lokácie vnútri zóny ani nepočíta rozloženie z aktuálneho filtra úrovne.
-    Na rozdiel od balenia obdĺžnikov zostáva D pod celou halou, A je širšia
-    než B/C a pravé krídlo je odsadené od B/C. Chýbajúca zóna nezatvorí
-    jej priestor. Medzery v číslovaní ostávajú medzerami aj na mape.
     """
+    # Pevné obálky podľa fotografie; filtre nemenia mierku ani polohu.
+    # D zostáva pod celou halou, A je širšia než B/C.
+    # Chýbajúca zóna nezatvorí jej priestor. Medzery v číslovaní sa zachovajú.
     layout = {zone: dict(cfg) for zone, cfg in CAD_LAYOUT.items()}
     gap = ZONE_GAP * (1 if compact else EXPANDED_GAP_FACTOR) + 2 * OUTLINE_PADDING
     base = add_coords(df[df["tmp_zone"].isin(CAD_LAYOUT)], CAD_LAYOUT)
