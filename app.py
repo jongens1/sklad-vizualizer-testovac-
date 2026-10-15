@@ -6,6 +6,9 @@ import os
 
 # CAD kotvy a mierka sú spoločné pre všetky filtre. Súradnice sú relatívne,
 # nie zamerané metre. Zmeňte tieto hodnoty po overení skutočného CAD výkresu.
+# Proporcie odčítané zo snímky DWG (1452 × 892 px), nie zamerané metre.
+# X rastie doprava, Y nahor. Rozmery sú približne desatina pixelových rozmerov.
+# Rozsah čísel lokácií sa mapuje do obálky zóny vždy z CELÉHO Excelu.
 AISLE_STEP = 1.05
 POSITION_STEP = 0.75
 ZONE_GAP = 6.0
@@ -20,8 +23,18 @@ CAD_LAYOUT = {
     "2D": {"x0": 0, "y0": 6, "orientation": "horizontal"},
     "2E": {"x0": -35, "y0": 39, "orientation": "vertical"},
     "2F": {"x0": 95, "y0": 39, "orientation": "vertical"},
+    "2A": {"x0": 24.6, "y0": 65.8, "width": 99.8, "height": 15.4, "orientation": "horizontal"},
+    "2B": {"x0": 19.0, "y0": 41.2, "width": 91.8, "height": 15.8, "orientation": "horizontal"},
+    "2C": {"x0": 19.0, "y0": 24.0, "width": 91.8, "height": 14.4, "orientation": "horizontal"},
+    "2D": {"x0": 3.0, "y0": 2.4, "width": 140.8, "height": 13.2, "orientation": "horizontal"},
+    "2E": {"x0": 2.5, "y0": 20.5, "width": 13.0, "height": 54.5, "orientation": "vertical"},
+    "2F": {"x0": 126.4, "y0": 20.6, "width": 12.9, "height": 51.0, "orientation": "vertical"},
 }
+# Voliteľné reverse_aisle/reverse_position v konfigurácii otočia číslovanie.
+# Snímka neumožňuje spoľahlivo priradiť konkrétne čísla k jednotlivým regálom.
+# Orientačné stanice v priechodoch; ich identita/poloha nie je overená DWG.
 # Orientačné stanice. x/y sú súradnice v pôvodnom CAD_LAYOUT.
+# x/y sú súradnice v pôvodnom CAD_LAYOUT.
 # Voliteľná zone umožní stanici sledovať posun jej zóny a filter zóny.
 # Bez zone je stanica pevná a zobrazí sa iba v celom loope.
 STATIONS = [
@@ -29,6 +42,10 @@ STATIONS = [
     {"name": "Stanica 2", "x": 50, "y": 120, "type": "station", "zone": "2A"},
     {"name": "Inbound", "x": -20, "y": 20, "type": "inbound"},
     {"name": "Outbound", "x": 105, "y": 20, "type": "outbound"},
+    {"name": "Stanica 1", "x": 40, "y": 61, "type": "station", "zone": "2A"},
+    {"name": "Stanica 2", "x": 90, "y": 61, "type": "station", "zone": "2A"},
+    {"name": "Inbound", "x": 12, "y": 18, "type": "inbound"},
+    {"name": "Outbound", "x": 133, "y": 18, "type": "outbound"},
 ]
 STATION_STYLES = {
     "station": ("Stanica", "#2563eb", "diamond"),
@@ -102,6 +119,15 @@ def get_cad_coords(row, layout=None):
     u, p = row["ul_num"], row["poz_num"]
     if cfg is None:
         return u, p
+    if "aisle_range" in cfg:
+        def relative(value, limits, reverse):
+            low, high = limits
+            fraction = (value - low) / (high - low) if high > low else 0.5
+            return 1 - fraction if reverse else fraction
+        aisle = relative(u, cfg["aisle_range"], cfg.get("reverse_aisle", False))
+        position = relative(p, cfg["position_range"], cfg.get("reverse_position", False))
+        x, y = (aisle, position) if cfg["orientation"] == "horizontal" else (position, aisle)
+        return cfg["x0"] + x * cfg["width"], cfg["y0"] + y * cfg["height"]
     if cfg["orientation"] == "horizontal":
         return cfg["x0"] + u * AISLE_STEP, cfg["y0"] + p * POSITION_STEP
     return cfg["x0"] + p * POSITION_STEP, cfg["y0"] + u * AISLE_STEP
@@ -122,10 +148,14 @@ def bounds(df):
 
 def build_layout(df, compact=True):
     """Usporiadanie D–C–B–A a bočných krídel E/F z celého vstupu.
+    """Pevné obálky podľa fotografie; filtre nemenia mierku ani polohu.
 
     Kompaktný režim zabalí bloky s jednotnou medzerou. Rozšírený zachová
     aspoň CAD odstupy a zväčší minimálnu medzeru. Nikdy nepresúva jednotlivé
     lokácie vnútri zóny ani nepočíta rozloženie z aktuálneho filtra úrovne.
+    Na rozdiel od balenia obdĺžnikov zostáva D pod celou halou, A je širšia
+    než B/C a pravé krídlo je odsadené od B/C. Chýbajúca zóna nezatvorí
+    jej priestor. Medzery v číslovaní ostávajú medzerami aj na mape.
     """
     layout = {zone: dict(cfg) for zone, cfg in CAD_LAYOUT.items()}
     gap = ZONE_GAP * (1 if compact else EXPANDED_GAP_FACTOR) + 2 * OUTLINE_PADDING
@@ -156,6 +186,16 @@ def build_layout(df, compact=True):
             layout[zone]["y0"] += layout["2C"]["y0"] - CAD_LAYOUT["2C"]["y0"]
     elif "2E" in boxes and "2F" in boxes:
         layout["2F"]["x0"] += max(0, boxes["2E"][1] + gap - boxes["2F"][0])
+    for zone, group in df.groupby("tmp_zone"):
+        if zone in layout:
+            layout[zone]["aisle_range"] = (float(group["ul_num"].min()), float(group["ul_num"].max()))
+            layout[zone]["position_range"] = (float(group["poz_num"].min()), float(group["poz_num"].max()))
+    if not compact:
+        extra = ZONE_GAP * (EXPANDED_GAP_FACTOR - 1)
+        for zone, multiplier in {"2D": 0, "2C": 1, "2B": 2, "2A": 3, "2E": 1, "2F": 1}.items():
+            layout[zone]["y0"] += extra * multiplier
+        layout["2E"]["x0"] -= extra
+        layout["2F"]["x0"] += extra
     return layout
 
 
@@ -289,6 +329,7 @@ def main():
     st.set_page_config(layout="wide", page_title="SKLC3 | Pôdorys skladu")
     st.title("SKLC3 · Pôdorys skladu")
     st.caption("Vyberte zónu a úroveň. Detail lokácie sa zobrazí po prejdení myšou.")
+    st.caption("Rozloženie zón podľa snímky DWG. Polohy lokácií v zónach sú pomerné podľa číslovania; nejde o zamerané CAD súradnice.")
     file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.xlsx")
     if not os.path.isfile(file_path):
         st.error("Súbor data.xlsx nebol nájdený. Uložte ho do rovnakého priečinka ako app.py.")
